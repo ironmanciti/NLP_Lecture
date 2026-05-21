@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(jupytext --version)",
+      "Bash(pre-commit --version)",
+      "Bash(pip show *)",
+      "Bash(jupytext --set-formats ipynb,py:percent 010_Tokenizers.ipynb 040_TFIDF_Embedding.ipynb 080_language_translation_KerasAPI_teacherForcing.ipynb 130_Transformer.ipynb 150_autoregressive_language_generation.ipynb 300_HuggingFace_QuickStart_pipeline_tokenizer.ipynb 320_Custom_Sentiment_Analysis_navermovie.ipynb 600_Text_Generation_Prompts.ipynb 601_Text_Generation_Prompts_CLOVAX.ipynb Template_Creation.ipynb)",
+      "Bash(jupytext --sync 010_Tokenizers.ipynb)",
+      "Bash(mv 040_TFIDF_Embedding.ipynb 020_TFIDF_Embedding.ipynb)",
+      "Bash(mv 040_TFIDF_Embedding.py 020_TFIDF_Embedding.py)",
+      "Bash(jupytext --sync 020_TFIDF_Embedding.ipynb)",
+      "Bash(jupytext --sync 030_tokenizer_embedding.py)",
+      "Bash(mv 020_TFIDF_Embedding.ipynb 020_vectorize_TFIDF_Embedding.ipynb)",
+      "Bash(mv 020_TFIDF_Embedding.py 020_vectorize_TFIDF_Embedding.py)",
+      "Bash(jupytext --sync 020_vectorize_TFIDF_Embedding.py 030_tokenizer_embedding.py)",
+      "Bash(mv 030_tokenizer_embedding.ipynb 030_수강생실습_tokenizer_embedding.ipynb)",
+      "Bash(mv 030_tokenizer_embedding.py 030_수강생실습_tokenizer_embedding.py)",
+      "Bash(jupytext --sync 030_수강생실습_tokenizer_embedding.ipynb)"
+    ]
+  }
+}

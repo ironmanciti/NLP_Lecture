@@ -2,3 +2,8 @@
 
 # .env 파일을 git에서 무시
 .env
+
+# Jupyter 체크포인트 / 캐시
+.ipynb_checkpoints/
+__pycache__/
+*.pyc

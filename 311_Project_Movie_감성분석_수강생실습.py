@@ -1,0 +1,327 @@
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     notebook_metadata_filter: -jupytext.text_representation.jupytext_version
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#   kernelspec:
+#     display_name: Python 3 (ipykernel)
+#     language: python
+#     name: python3
+# ---
+
+# %% [markdown]
+# # 311. 수강생 실습 - 영화 리뷰 감성분석: Pipeline vs ClovaX 비교
+#
+# ## 학습 목표
+# 같은 영화 리뷰 감성분석 문제를 **두 가지 서로 다른 방식**으로 풀어 보고 비교합니다.
+#
+# | 방식 | 도구 | 접근 방법 |
+# |------|------|-----------|
+# | 방법 1 | Hugging Face `pipeline` | 감성분석 **전용 사전학습 모델**을 그대로 사용 |
+# | 방법 2 | ClovaX (생성형 LLM) | **프롬프트**로 "긍정/부정 분류"를 지시 |
+#
+# 학습 없이(fine-tuning 없이) **이미 만들어진 모델을 활용**하는 두 갈래를 경험하고,
+# 각 방식의 장단점을 직접 확인하는 것이 목표입니다.
+#
+# **실행 환경**: Colab GPU 권장. ClovaX 1.5B 모델은 `.env` 의 `HF_TOKEN` 로그인이 필요합니다.
+
+# %%
+# 실습에 필요한 패키지 설치 (Colab 기준 — 로컬에 이미 설치돼 있으면 생략 가능)
+# !pip install -q transformers python-dotenv
+
+# %%
+import os
+import warnings
+import pandas as pd
+import tensorflow as tf
+from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
+from dotenv import load_dotenv
+from huggingface_hub import login
+warnings.filterwarnings('ignore')
+
+# .env 의 HF_TOKEN 으로 Hugging Face 로그인 (ClovaX 모델 다운로드에 필요)
+load_dotenv()
+token = os.getenv("HF_TOKEN")
+if token:
+    login(token=token)
+
+# %% [markdown]
+# ---
+# ## 과제 1. 데이터 준비 및 최소 전처리
+#
+# 네이버 영화평(NSMC) 데이터를 불러옵니다. 이번 실습은 **모델을 학습시키지 않으므로**
+# 복잡한 전처리 없이 평가에 쓸 일부 데이터만 준비하면 됩니다.
+#
+# **할 일**:
+# - `tf.keras.utils.get_file` 로 NSMC train/test 데이터를 내려받으세요.
+# - `pandas` 로 읽고 결측치를 제거한 뒤, 테스트 데이터 1,000건을 표본 추출하세요.
+# - 평가에 사용할 테스트 문장 10개(`test_samples`)와 정답(`test_labels`)을 준비하세요.
+#
+# **힌트**: 두 방법(Pipeline / ClovaX)을 **똑같은 10개 문장**으로 평가해야 공정한 비교가 됩니다.
+
+# %%
+# NSMC 데이터 다운로드
+DATA_TEST_PATH = tf.keras.utils.get_file(
+    "ratings_test.txt",
+    "https://raw.github.com/ironmanciti/Infran_NLP/master/data/naver_movie/ratings_test.txt")
+
+# 데이터 로드 후 결측치 제거
+test_data = pd.read_csv(DATA_TEST_PATH, delimiter='\t').dropna()
+
+# 테스트 데이터 1,000건 표본 추출 (random_state 고정 → 재현 가능)
+df_test = test_data.sample(n=1_000, random_state=1)
+df_test['cleaned_document'] = df_test['document'].astype(str)
+print("테스트 데이터:", df_test.shape)
+
+# 두 방법을 공정하게 비교하기 위한 공통 평가 데이터 (문장 10개)
+test_samples = df_test['cleaned_document'].head(10).tolist()
+test_labels = df_test['label'].head(10).tolist()   # 0=부정, 1=긍정
+
+# 직관적 비교용 짧은 샘플 문장
+sample_texts = [
+    "다시는 보고 싶지 않은 짜증나는 영화",
+    "아주 재미있는 영화",
+    "정말 재미없는 영화였다",
+    "이 영화 최고",
+    "보통 영화",
+]
+
+print("\n평가용 테스트 문장 10개 준비 완료")
+
+# %% [markdown]
+# **관찰 포인트**
+# - 학습(fine-tuning)을 하지 않으므로 훈련 데이터는 필요 없고, **평가용 데이터만** 준비했습니다.
+# - `label` 은 0(부정)/1(긍정) 이진값입니다.
+
+# %% [markdown]
+# ---
+# ## 과제 2. 방법 1 — Hugging Face Pipeline 으로 감성 분석
+#
+# `pipeline('sentiment-analysis', ...)` 은 토큰화·모델 추론·후처리를 한 번에 처리해 줍니다.
+#
+# **할 일**:
+# - `nlptown/bert-base-multilingual-uncased-sentiment` 모델로 감성분석 파이프라인을 만드세요.
+# - `sample_texts` 5개 문장을 분석해 결과를 출력하세요.
+#
+# **힌트**: 이 모델은 긍정/부정이 아니라 **별점(1~5 stars)** 을 출력합니다.
+# 결과의 `label` 은 `"4 stars"` 같은 문자열, `score` 는 신뢰도입니다.
+
+# %%
+# 다국어 감성분석 전용 모델로 파이프라인 생성
+model_name = "nlptown/bert-base-multilingual-uncased-sentiment"
+sentiment_classifier = pipeline('sentiment-analysis', model=model_name)
+
+# 샘플 문장 분석
+print("[ Hugging Face Pipeline 감성 분석 결과 ]\n")
+results = sentiment_classifier(sample_texts)
+for text, result in zip(sample_texts, results):
+    print(f"{text}")
+    print(f"  → {result['label']}, 신뢰도: {result['score']:.4f}\n")
+
+# %% [markdown]
+# **관찰 포인트**
+# - 출력이 "긍정/부정"이 아니라 **별점(1~5)** 입니다 → 우리 문제(이진 분류)에 맞게 **변환**이 필요합니다.
+# - 별점 모델이라 "보통 영화" 같은 중립 문장에는 3점 근처가 나옵니다.
+
+# %% [markdown]
+# ---
+# ## 과제 3. Hugging Face Pipeline 정확도 평가
+#
+# 별점 출력을 긍정/부정으로 바꿔, 테스트 10문장에 대한 정확도를 계산합니다.
+#
+# **할 일**:
+# - `test_samples` 를 파이프라인으로 분석하세요.
+# - 별점을 **4점 이상이면 긍정(1), 그 미만이면 부정(0)** 으로 변환하세요.
+# - 예측값과 정답을 비교해 정확도를 계산하세요.
+
+# %%
+print("[ Hugging Face Pipeline 테스트 데이터 평가 ]\n")
+sentiment_results = sentiment_classifier(test_samples)
+
+correct_hf = 0
+for i, (text, true_label, result) in enumerate(zip(test_samples, test_labels, sentiment_results)):
+    # 별점("4 stars" 등)을 긍정(1)/부정(0)으로 변환 — 4점 이상이면 긍정
+    star = int(result['label'].split()[0])
+    predicted_label = 1 if star >= 4 else 0
+
+    is_correct = "✓" if true_label == predicted_label else "✗"
+    if true_label == predicted_label:
+        correct_hf += 1
+
+    print(f"리뷰 {i+1}: {text[:40]}...")
+    print(f"  실제: {'긍정' if true_label else '부정'}, "
+          f"예측: {'긍정' if predicted_label else '부정'} ({result['label']}) {is_correct}")
+
+accuracy_hf = correct_hf / len(test_samples)
+print(f"\n정확도: {accuracy_hf:.4f} ({correct_hf}/{len(test_samples)})")
+
+# %% [markdown]
+# **관찰 포인트**
+# - 전용 분류 모델이라 **빠르고 안정적**이지만, 별점→긍부정 **변환 규칙을 사람이 정해야** 합니다.
+# - 변환 기준(4점 이상=긍정)을 바꾸면 정확도가 달라집니다.
+
+# %% [markdown]
+# ---
+# ## 과제 4. 방법 2 — ClovaX 로드 및 프롬프트 기반 감성 분석
+#
+# 이번에는 감성분석 전용 모델이 아니라, **생성형 LLM(ClovaX)** 에게
+# 프롬프트로 "긍정/부정을 분류하라"고 지시합니다.
+#
+# **할 일**:
+# - `HyperCLOVAX-SEED-Text-Instruct-1.5B` 모델과 토크나이저를 로드하세요.
+# - 리뷰를 받아 "긍정/부정"을 판정하는 `analyze_sentiment_clovax` 함수를 완성하세요.
+# - `sample_texts` 5문장으로 동작을 확인하세요.
+#
+# **힌트**: LLM 출력은 자유 텍스트이므로, 생성 결과에서 **"긍정"/"부정" 키워드를 찾아**
+# 정수 라벨로 바꾸는 후처리가 필요합니다.
+
+# %%
+# ClovaX 생성형 모델 로드
+print("[ ClovaX 모델 로드 중... ]")
+clovax_name = "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B"
+clovax_model = AutoModelForCausalLM.from_pretrained(clovax_name, device_map="auto")
+clovax_tokenizer = AutoTokenizer.from_pretrained(clovax_name)
+print("ClovaX 모델 로드 완료")
+
+
+# %%
+def analyze_sentiment_clovax(text):
+    """ClovaX 에게 프롬프트로 감성 분류를 시키고, 결과를 1(긍정)/0(부정)으로 반환한다."""
+    # 역할(system)과 지시(user) 프롬프트 구성
+    system_content = "당신은 영화 리뷰의 감성을 분석하는 전문가입니다. 주어진 리뷰를 긍정 또는 부정으로 분류해주세요."
+    user_content = f"""다음 영화 리뷰의 감성을 분석하여 긍정 또는 부정으로 분류해주세요.
+
+리뷰: {text}
+
+답변 형식: 긍정 또는 부정만 출력하세요."""
+
+    chat = [
+        {"role": "tool_list", "content": ""},
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+
+    # 채팅 템플릿 적용 후 모델 입력 생성
+    inputs = clovax_tokenizer.apply_chat_template(
+        chat, add_generation_prompt=True, return_dict=True, return_tensors="pt")
+    inputs = inputs.to(clovax_model.device)
+
+    # 텍스트 생성
+    output_ids = clovax_model.generate(
+        **inputs,
+        max_length=512,
+        repetition_penalty=1.2,
+        eos_token_id=clovax_tokenizer.eos_token_id,
+    )
+    output_text = clovax_tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+
+    # 특수 종료 토큰에서 자르고, 입력 프롬프트 부분을 제거해 답변만 남긴다
+    for stop_str in ["<|endofturn|>", "<|stop|>"]:
+        if stop_str in output_text:
+            output_text = output_text.split(stop_str)[0]
+    if user_content in output_text:
+        result_text = output_text.split(user_content)[-1].strip()
+    else:
+        result_text = output_text.strip()
+
+    # 생성된 답변에서 키워드를 찾아 정수 라벨로 변환
+    if "긍정" in result_text:
+        return 1
+    elif "부정" in result_text:
+        return 0
+    else:
+        return 1   # 키워드를 못 찾으면 기본값(긍정)
+
+
+# 샘플 문장으로 동작 확인
+print("\n[ ClovaX 감성 분석 결과 ]\n")
+for text in sample_texts:
+    result = analyze_sentiment_clovax(text)
+    print(f"{text} → {'긍정' if result == 1 else '부정'}")
+
+# %% [markdown]
+# **관찰 포인트**
+# - ClovaX 는 감성분석 전용 모델이 아니지만, **프롬프트만으로** 분류 작업을 수행합니다.
+# - 출력이 자유 텍스트라 "긍정/부정" 키워드를 직접 파싱해야 합니다.
+#   → 프롬프트에 "긍정 또는 부정만 출력"이라고 형식을 지정한 이유입니다.
+
+# %% [markdown]
+# ---
+# ## 과제 5. ClovaX 정확도 평가
+#
+# **할 일**:
+# - 과제 3과 **동일한 `test_samples` 10문장**을 `analyze_sentiment_clovax` 로 분석하세요.
+# - 예측값과 정답을 비교해 정확도를 계산하세요.
+
+# %%
+print("[ ClovaX 테스트 데이터 평가 ]\n")
+
+correct_clovax = 0
+for i, (text, true_label) in enumerate(zip(test_samples, test_labels)):
+    predicted_label = analyze_sentiment_clovax(text)
+
+    is_correct = "✓" if true_label == predicted_label else "✗"
+    if true_label == predicted_label:
+        correct_clovax += 1
+
+    print(f"리뷰 {i+1}: {text[:40]}...")
+    print(f"  실제: {'긍정' if true_label else '부정'}, "
+          f"예측: {'긍정' if predicted_label else '부정'} {is_correct}")
+
+accuracy_clovax = correct_clovax / len(test_samples)
+print(f"\n정확도: {accuracy_clovax:.4f} ({correct_clovax}/{len(test_samples)})")
+
+# %% [markdown]
+# **관찰 포인트**
+# - 별도 변환 규칙 없이 곧바로 "긍정/부정"을 얻습니다 — 사람이 정할 후처리 규칙이 적습니다.
+# - 다만 모델이 형식을 안 지키면(키워드 없음) 결과가 흔들릴 수 있습니다.
+
+# %% [markdown]
+# ---
+# ## 과제 6. 두 방법 비교하기
+#
+# **할 일**:
+# - 과제 3과 과제 5에서 구한 정확도(`accuracy_hf`, `accuracy_clovax`)를 나란히 출력하세요.
+# - 어느 방법이 더 정확했는지, 그리고 그 이유를 생각해 보세요.
+
+# %%
+print("=" * 45)
+print(f"{'방법':<28}{'정확도'}")
+print("-" * 45)
+print(f"{'Hugging Face Pipeline':<28}{accuracy_hf:.4f}")
+print(f"{'ClovaX (프롬프트)':<26}{accuracy_clovax:.4f}")
+print("=" * 45)
+
+# %% [markdown]
+# ---
+# ## 종합 정리
+#
+# 같은 감성분석 문제를 학습 없이 두 가지 방식으로 풀었습니다.
+#
+# | 항목 | Hugging Face Pipeline | ClovaX (생성형 LLM) |
+# |------|----------------------|---------------------|
+# | 모델 성격 | 감성분석 **전용** 사전학습 모델 | 범용 생성형 LLM |
+# | 사용 방법 | 함수 호출 한 번 | **프롬프트** 설계 |
+# | 출력 형태 | 별점(1~5) → 변환 필요 | "긍정/부정" 텍스트 → 키워드 파싱 |
+# | 속도 | 빠름 | 상대적으로 느림 (텍스트 생성) |
+# | 유연성 | 낮음 (모델이 정해진 일만) | 높음 (프롬프트만 바꾸면 다른 작업도 가능) |
+#
+# **핵심 메시지**: 정해진 작업을 빠르고 안정적으로 처리하려면 **전용 모델(Pipeline)** 이,
+# 프롬프트만 바꿔 다양한 작업에 유연하게 대응하려면 **생성형 LLM** 이 유리합니다.
+# 문제의 성격에 맞는 도구를 고르는 것이 중요합니다.
+
+# %% [markdown]
+# ---
+# ## 추가 실습 (선택 과제)
+#
+# 1. 평가 문장 수를 10개에서 30~50개로 늘려 두 방법의 정확도를 다시 비교하세요.
+# 2. 과제 3의 별점 변환 기준을 "3점 이상이면 긍정"으로 바꾸면 정확도가 어떻게 변하나요?
+# 3. ClovaX 프롬프트(`system_content` / `user_content`)를 수정해 정확도를 높여 보세요.
+# 4. 두 방법의 예측이 **서로 엇갈린** 문장을 찾아 출력하고, 어느 쪽이 맞았는지 분석하세요.
+
+# %%

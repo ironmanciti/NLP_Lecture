@@ -1,0 +1,7 @@
+# jupytext 프로젝트 설정
+# 모든 .ipynb 와 짝이 되는 .py 를 percent 포맷으로 유지
+formats = "ipynb,py:percent"
+
+# 출력 셀은 .ipynb 에만 보존 (.py 는 코드/마크다운만)
+notebook_metadata_filter = "-jupytext.text_representation.jupytext_version"
+cell_metadata_filter = "-all"
