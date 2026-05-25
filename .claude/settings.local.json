@@ -11,7 +11,8 @@
       "Bash(jupytext --sync \"145_HuggingFace_NER_FineTuning.py\")",
       "Bash(jupytext --to notebook \"141_Custom_Sentiment_Analysis_navermovie_수강생실습.py\")",
       "Bash(jupytext --to notebook \"151_HuggingFace_NER_FineTuning_수강생실습.py\")",
-      "Bash(jupytext --to notebook \"311_Project_Movie_감성분석_수강생실습.py\")"
+      "Bash(jupytext --to notebook \"311_Project_Movie_감성분석_수강생실습.py\")",
+      "Bash(jupytext --to notebook 030_tokenizer_embedding.py)"
     ]
   }
 }
