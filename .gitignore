@@ -7,3 +7,11 @@
 .ipynb_checkpoints/
 __pycache__/
 *.pyc
+
+# Claude Code 설정
+CLAUDE.md
+.claude/
+
+# jupytext 관련 설정 파일
+jupytext.toml
+.pre-commit-config.yaml
