@@ -50,20 +50,11 @@
 
 # %%
 # 필요한 라이브러리 설치 (Colab 등에서 최초 1회 실행)
-# !pip install -q -U langchain langchain-google-genai langchain-mcp-adapters mcp
 
 # %%
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
 
 # %%
-from langchain.chat_models import init_chat_model
-
 # 모델 초기화 (400 노트북과 동일하게 Gemini 사용)
-model = init_chat_model("gemini-2.5-flash", model_provider="google_genai")
-model
 
 # %% [markdown]
 # ## 1. MCP Server 만들기
@@ -87,36 +78,13 @@ model
 
 # %%
 # MCP Server 코드를 문자열로 정의한 뒤 파일로 저장합니다.
-math_server_code = '''
-from mcp.server.fastmcp import FastMCP
-
 # MCP Server 객체 생성 ("Math"는 서버 이름, host/port 는 HTTP 접속 주소)
-mcp = FastMCP("Math", host="127.0.0.1", port=8000)
-
-
-@mcp.tool()
 def add(a: int, b: int) -> int:
-    """두 정수를 더합니다."""
-    return a + b
-
-
-@mcp.tool()
 def multiply(a: int, b: int) -> int:
-    """두 정수를 곱합니다."""
-    return a * b
-
-
-if __name__ == "__main__":
     # streamable-http 방식으로 서버 실행 (기본 주소: http://127.0.0.1:8000/mcp)
     # 주의: MCP SDK 의 transport 이름은 하이픈("streamable-http")입니다.
     #       클라이언트(langchain-mcp-adapters)는 언더스코어("streamable_http")를 쓰므로 혼동 주의.
-    mcp.run(transport="streamable-http")
-'''
 
-with open("math_server.py", "w", encoding="utf-8") as f:
-    f.write(math_server_code)
-
-print("math_server.py MCP Server 파일을 생성했습니다.")
 
 # %% [markdown]
 # ## 2. MCP Server 실행
@@ -126,42 +94,10 @@ print("math_server.py MCP Server 파일을 생성했습니다.")
 # 서버의 출력(로그·오류)은 `mcp_server.log` 파일로 보냅니다 — 문제가 생기면 이 파일을 확인하세요.
 
 # %%
-import subprocess
-import sys
-import socket
-import time
-
 # 이미 실행 중인 서버가 있으면 먼저 종료합니다 (셀 재실행 대비).
-if "server_process" in globals():
-    server_process.terminate()
-
 # MCP Server를 백그라운드 프로세스로 실행 (출력은 로그 파일로)
-log_file = open("mcp_server.log", "w", encoding="utf-8")
-server_process = subprocess.Popen(
-    [sys.executable, "math_server.py"],
-    stdout=log_file,
-    stderr=subprocess.STDOUT,
-)
-
-
 def wait_for_server(host="127.0.0.1", port=8000, timeout=30):
-    """지정한 host:port 에 접속될 때까지 최대 timeout 초 동안 기다립니다."""
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1):
-                return True
-        except OSError:
-            time.sleep(0.5)
-    return False
-
-
 # 서버가 포트를 열 때까지 대기
-if wait_for_server():
-    time.sleep(1)  # 서버 내부 초기화를 위한 여유 시간
-    print(f"MCP Server 실행됨 (PID: {server_process.pid})")
-else:
-    print("서버 기동 실패 — mcp_server.log 파일을 확인하세요.")
 
 # %% [markdown]
 # ## 3. MCP Client로 서버에 연결
@@ -171,18 +107,9 @@ else:
 # 방금 띄운 서버의 주소를 지정합니다.
 
 # %%
-from langchain_mcp_adapters.client import MultiServerMCPClient
-
 # 연결할 MCP Server 목록 정의
-client = MultiServerMCPClient(
-    {
-        "math": {
-            "url": "http://127.0.0.1:8000/mcp",   # 서버 접속 주소
-            "transport": "streamable_http",       # 통신 방식
-        },
         # 다른 서버를 추가하려면 여기에 항목을 더 넣으면 됩니다.
-    }
-)
+
 
 # %% [markdown]
 # ## 4. MCP 도구 가져오기
@@ -195,11 +122,6 @@ client = MultiServerMCPClient(
 
 # %%
 # MCP Server의 도구를 LangChain 도구로 변환
-mcp_tools = await client.get_tools()
-
-print(f"가져온 도구 개수: {len(mcp_tools)}")
-for t in mcp_tools:
-    print(f"- {t.name}: {t.description}")
 
 # %% [markdown]
 # ## 5. MCP 도구로 에이전트 생성
@@ -209,16 +131,6 @@ for t in mcp_tools:
 # MCP 도구든 `@tool` 도구든 에이전트 입장에서는 차이가 없습니다.
 
 # %%
-from langchain.agents import create_agent
-
-agent = create_agent(
-    model,
-    tools=mcp_tools,
-    system_prompt="당신은 도움이 되는 어시스턴트입니다. 계산이 필요하면 주어진 도구를 사용하세요.",
-)
-
-print("MCP 도구로 에이전트가 생성되었습니다.")
-print(f"사용 가능한 도구: {[t.name for t in mcp_tools]}")
 
 # %% [markdown]
 # ## 6. 에이전트 실행
@@ -228,12 +140,6 @@ print(f"사용 가능한 도구: {[t.name for t in mcp_tools]}")
 
 # %%
 # 에이전트 호출 (비동기)
-result = await agent.ainvoke(
-    {"messages": [{"role": "user", "content": "12 더하기 8을 한 다음, 그 결과에 5를 곱하면?"}]}
-)
-
-print("에이전트 응답:")
-result["messages"][-1].pretty_print()
 
 # %% [markdown]
 # ### 추론 과정 확인 (스트리밍)
@@ -242,11 +148,6 @@ result["messages"][-1].pretty_print()
 # 단계별로 확인할 수 있습니다.
 
 # %%
-async for event in agent.astream(
-    {"messages": [{"role": "user", "content": "7과 6을 곱한 값은?"}]},
-    stream_mode="values",
-):
-    event["messages"][-1].pretty_print()
 
 # %% [markdown]
 # ## 7. MCP 도구와 로컬 도구 함께 쓰기
@@ -255,27 +156,8 @@ async for event in agent.astream(
 # 외부 표준 도구(MCP)와 내가 만든 전용 도구를 함께 활용하는 실전 패턴입니다.
 
 # %%
-from langchain.tools import tool
-from datetime import datetime
-
-@tool
 def get_now() -> str:
-    """현재 날짜와 시간을 반환합니다."""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
 # MCP 도구 + 로컬 도구를 합쳐서 에이전트 생성
-combined_tools = mcp_tools + [get_now]
-
-hybrid_agent = create_agent(
-    model,
-    tools=combined_tools,
-    system_prompt="당신은 도움이 되는 어시스턴트입니다. 필요한 도구를 골라 사용하세요.",
-)
-
-result = await hybrid_agent.ainvoke(
-    {"messages": [{"role": "user", "content": "지금 몇 시인지 알려주고, 100 곱하기 7도 계산해줘."}]}
-)
-result["messages"][-1].pretty_print()
 
 # %% [markdown]
 # ## 8. 서버 프로세스 종료
@@ -283,8 +165,6 @@ result["messages"][-1].pretty_print()
 # 실습이 끝나면 백그라운드로 띄운 MCP Server를 종료합니다.
 
 # %%
-server_process.terminate()
-print("MCP Server를 종료했습니다.")
 
 # %% [markdown]
 # ## 주요 포인트 정리

@@ -32,23 +32,9 @@
 
 # %%
 # 실습에 필요한 패키지 설치 (Colab 기준 — 로컬에 이미 설치돼 있으면 생략 가능)
-# !pip install -q transformers python-dotenv
 
 # %%
-import os
-import warnings
-import pandas as pd
-import tensorflow as tf
-from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
-from dotenv import load_dotenv
-from huggingface_hub import login
-warnings.filterwarnings('ignore')
-
 # .env 의 HF_TOKEN 으로 Hugging Face 로그인 (ClovaX 모델 다운로드에 필요)
-load_dotenv()
-token = os.getenv("HF_TOKEN")
-if token:
-    login(token=token)
 
 # %% [markdown]
 # ---
@@ -66,32 +52,10 @@ if token:
 
 # %%
 # NSMC 데이터 다운로드
-DATA_TEST_PATH = tf.keras.utils.get_file(
-    "ratings_test.txt",
-    "https://raw.github.com/ironmanciti/Infran_NLP/master/data/naver_movie/ratings_test.txt")
-
 # 데이터 로드 후 결측치 제거
-test_data = pd.read_csv(DATA_TEST_PATH, delimiter='\t').dropna()
-
 # 테스트 데이터 1,000건 표본 추출 (random_state 고정 → 재현 가능)
-df_test = test_data.sample(n=1_000, random_state=1)
-df_test['cleaned_document'] = df_test['document'].astype(str)
-print("테스트 데이터:", df_test.shape)
-
 # 두 방법을 공정하게 비교하기 위한 공통 평가 데이터 (문장 5개)
-test_samples = df_test['cleaned_document'].head(5).tolist()
-test_labels = df_test['label'].head(5).tolist()   # 0=부정, 1=긍정
-
 # 직관적 비교용 짧은 샘플 문장
-sample_texts = [
-    "다시는 보고 싶지 않은 짜증나는 영화",
-    "아주 재미있는 영화",
-    "정말 재미없는 영화였다",
-    "이 영화 최고",
-    "보통 영화",
-]
-
-print("\n평가용 테스트 문장 5개 준비 완료")
 
 # %% [markdown]
 # **관찰 포인트**
@@ -113,15 +77,7 @@ print("\n평가용 테스트 문장 5개 준비 완료")
 
 # %%
 # 다국어 감성분석 전용 모델로 파이프라인 생성
-model_name = "nlptown/bert-base-multilingual-uncased-sentiment"
-sentiment_classifier = pipeline('sentiment-analysis', model=model_name)
-
 # 샘플 문장 분석
-print("[ Hugging Face Pipeline 감성 분석 결과 ]\n")
-results = sentiment_classifier(sample_texts)
-for text, result in zip(sample_texts, results):
-    print(f"{text}")
-    print(f"  → {result['label']}, 신뢰도: {result['score']:.4f}\n")
 
 # %% [markdown]
 # **관찰 포인트**
@@ -139,26 +95,9 @@ for text, result in zip(sample_texts, results):
 # - 별점을 **4점 이상이면 긍정(1), 그 미만이면 부정(0)** 으로 변환하세요.
 # - 예측값과 정답을 비교해 정확도를 계산하세요.
 
-# %%
-print("[ Hugging Face Pipeline 테스트 데이터 평가 ]\n")
-sentiment_results = sentiment_classifier(test_samples)
-
-correct_hf = 0
-for i, (text, true_label, result) in enumerate(zip(test_samples, test_labels, sentiment_results)):
+    # %%
     # 별점("4 stars" 등)을 긍정(1)/부정(0)으로 변환 — 4점 이상이면 긍정
-    star = int(result['label'].split()[0])
-    predicted_label = 1 if star >= 4 else 0
 
-    is_correct = "✓" if true_label == predicted_label else "✗"
-    if true_label == predicted_label:
-        correct_hf += 1
-
-    print(f"리뷰 {i+1}: {text[:40]}...")
-    print(f"  실제: {'긍정' if true_label else '부정'}, "
-          f"예측: {'긍정' if predicted_label else '부정'} ({result['label']}) {is_correct}")
-
-accuracy_hf = correct_hf / len(test_samples)
-print(f"\n정확도: {accuracy_hf:.4f} ({correct_hf}/{len(test_samples)})")
 
 # %% [markdown]
 # **관찰 포인트**
@@ -182,67 +121,15 @@ print(f"\n정확도: {accuracy_hf:.4f} ({correct_hf}/{len(test_samples)})")
 
 # %%
 # ClovaX 생성형 모델 로드
-print("[ ClovaX 모델 로드 중... ]")
-clovax_name = "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B"
-clovax_model = AutoModelForCausalLM.from_pretrained(clovax_name, device_map="auto")
-clovax_tokenizer = AutoTokenizer.from_pretrained(clovax_name)
-print("ClovaX 모델 로드 완료")
-
 
 # %%
 def analyze_sentiment_clovax(text):
-    """ClovaX 에게 프롬프트로 감성 분류를 시키고, 결과를 1(긍정)/0(부정)으로 반환한다."""
     # 역할(system)과 지시(user) 프롬프트 구성
-    system_content = "당신은 영화 리뷰의 감성을 분석하는 전문가입니다. 주어진 리뷰를 긍정 또는 부정으로 분류해주세요."
-    user_content = f"""다음 영화 리뷰의 감성을 분석하여 긍정 또는 부정으로 분류해주세요.
-
-리뷰: {text}
-
-답변 형식: 긍정 또는 부정만 출력하세요."""
-
-    chat = [
-        {"role": "tool_list", "content": ""},
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_content},
-    ]
-
     # 채팅 템플릿 적용 후 모델 입력 생성
-    inputs = clovax_tokenizer.apply_chat_template(
-        chat, add_generation_prompt=True, return_dict=True, return_tensors="pt")
-    inputs = inputs.to(clovax_model.device)
-
     # 텍스트 생성
-    output_ids = clovax_model.generate(
-        **inputs,
-        max_length=512,
-        repetition_penalty=1.2,
-        eos_token_id=clovax_tokenizer.eos_token_id,
-    )
-    output_text = clovax_tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
-
     # 특수 종료 토큰에서 자르고, 입력 프롬프트 부분을 제거해 답변만 남긴다
-    for stop_str in ["<|endofturn|>", "<|stop|>"]:
-        if stop_str in output_text:
-            output_text = output_text.split(stop_str)[0]
-    if user_content in output_text:
-        result_text = output_text.split(user_content)[-1].strip()
-    else:
-        result_text = output_text.strip()
-
     # 생성된 답변에서 키워드를 찾아 정수 라벨로 변환
-    if "긍정" in result_text:
-        return 1
-    elif "부정" in result_text:
-        return 0
-    else:
-        return 1   # 키워드를 못 찾으면 기본값(긍정)
-
-
 # 샘플 문장으로 동작 확인
-print("\n[ ClovaX 감성 분석 결과 ]\n")
-for text in sample_texts:
-    result = analyze_sentiment_clovax(text)
-    print(f"{text} → {'긍정' if result == 1 else '부정'}")
 
 # %% [markdown]
 # **관찰 포인트**
@@ -259,22 +146,6 @@ for text in sample_texts:
 # - 예측값과 정답을 비교해 정확도를 계산하세요.
 
 # %%
-print("[ ClovaX 테스트 데이터 평가 ]\n")
-
-correct_clovax = 0
-for i, (text, true_label) in enumerate(zip(test_samples, test_labels)):
-    predicted_label = analyze_sentiment_clovax(text)
-
-    is_correct = "✓" if true_label == predicted_label else "✗"
-    if true_label == predicted_label:
-        correct_clovax += 1
-
-    print(f"리뷰 {i+1}: {text[:40]}...")
-    print(f"  실제: {'긍정' if true_label else '부정'}, "
-          f"예측: {'긍정' if predicted_label else '부정'} {is_correct}")
-
-accuracy_clovax = correct_clovax / len(test_samples)
-print(f"\n정확도: {accuracy_clovax:.4f} ({correct_clovax}/{len(test_samples)})")
 
 # %% [markdown]
 # **관찰 포인트**
@@ -290,12 +161,6 @@ print(f"\n정확도: {accuracy_clovax:.4f} ({correct_clovax}/{len(test_samples)}
 # - 어느 방법이 더 정확했는지, 그리고 그 이유를 생각해 보세요.
 
 # %%
-print("=" * 45)
-print(f"{'방법':<28}{'정확도'}")
-print("-" * 45)
-print(f"{'Hugging Face Pipeline':<28}{accuracy_hf:.4f}")
-print(f"{'ClovaX (프롬프트)':<26}{accuracy_clovax:.4f}")
-print("=" * 45)
 
 # %% [markdown]
 # ---
